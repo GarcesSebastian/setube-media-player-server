@@ -7,8 +7,28 @@ import { exec } from "child_process";
 
 const execAsync = promisify(exec);
 
-const searchCache = new Map<string, any>();
-const infoCache = new Map<string, any>();
+const searchCache = new Map<string, { data: any[]; timestamp: number }>();
+const infoCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 30 * 60 * 1000;
+
+const STATIC_FORMATS = [
+    { format_id: "high", ext: "m4a", resolution: "High (256kbps)" },
+    { format_id: "medium", ext: "m4a", resolution: "Medium (128kbps)" },
+    { format_id: "low", ext: "m4a", resolution: "Low (96kbps)" },
+    { format_id: "1080", ext: "mp4", resolution: "1080p" },
+    { format_id: "720", ext: "mp4", resolution: "720p" },
+    { format_id: "480", ext: "mp4", resolution: "480p" }
+];
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of searchCache.entries()) {
+        if (now - value.timestamp > CACHE_TTL) searchCache.delete(key);
+    }
+    for (const [key, value] of infoCache.entries()) {
+        if (now - value.timestamp > CACHE_TTL) infoCache.delete(key);
+    }
+}, 10 * 60 * 1000);
 
 export class MediaController {
     public static async Query(req: Request, res: Response) {
@@ -17,12 +37,14 @@ export class MediaController {
             if (!query) return res.status(400).json({ message: "Query missing" });
 
             const cacheKey = (query as string).toLowerCase().trim();
-            if (searchCache.has(cacheKey)) {
-                return res.status(200).json(searchCache.get(cacheKey));
+            const cached = searchCache.get(cacheKey);
+
+            if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+                return res.status(200).json(cached.data);
             }
 
             const r = await yts(query as string);
-            const result = r.videos.slice(0, 12).map(item => ({
+            const result = r.videos.map((item: any) => ({
                 video_id: item.videoId,
                 url: item.url,
                 title: item.title,
@@ -31,9 +53,10 @@ export class MediaController {
                 author: { name: item.author.name }
             }));
 
-            searchCache.set(cacheKey, result);
+            searchCache.set(cacheKey, { data: result, timestamp: Date.now() });
             return res.status(200).json(result);
         } catch (error) {
+            console.error('Query error:', error);
             return res.status(500).json({ message: "Error" });
         }
     }
@@ -43,26 +66,34 @@ export class MediaController {
             const { url } = req.query;
             if (!url) return res.status(400).json({ message: "URL missing" });
 
-            if (infoCache.has(url as string)) {
-                return res.status(200).json(infoCache.get(url as string));
+            const urlStr = url as string;
+
+            const cachedInfo = infoCache.get(urlStr);
+            if (cachedInfo && (Date.now() - cachedInfo.timestamp) < CACHE_TTL) {
+                return res.status(200).json(cachedInfo.data);
             }
 
-            const videoId = (url as string).split('v=')[1]?.split('&')[0];
-            if (!videoId) {
-                return res.status(400).json({ message: "Invalid YouTube URL" });
+            for (const cacheItem of searchCache.values()) {
+                const found = cacheItem.data.find(v => v.url === urlStr);
+                if (found) {
+                    const result = {
+                        id: found.video_id,
+                        url: found.url,
+                        title: found.title,
+                        duration: found.duration,
+                        thumbnail: found.thumbnail,
+                        author: found.author,
+                        formats: STATIC_FORMATS
+                    };
+                    infoCache.set(urlStr, { data: result, timestamp: Date.now() });
+                    return res.status(200).json(result);
+                }
             }
+
+            const videoId = urlStr.split('v=')[1]?.split('&')[0];
+            if (!videoId) return res.status(400).json({ message: "Invalid YouTube URL" });
 
             const info = await yts({ videoId: videoId });
-
-            const formats = [
-                { format_id: "high", ext: "m4a", resolution: "High (256kbps)" },
-                { format_id: "medium", ext: "m4a", resolution: "Medium (128kbps)" },
-                { format_id: "low", ext: "m4a", resolution: "Low (96kbps)" },
-                { format_id: "1080", ext: "mp4", resolution: "1080p" },
-                { format_id: "720", ext: "mp4", resolution: "720p" },
-                { format_id: "480", ext: "mp4", resolution: "480p" }
-            ];
-
             const result = {
                 id: info.videoId,
                 url: info.url,
@@ -70,12 +101,13 @@ export class MediaController {
                 duration: info.seconds,
                 thumbnail: info.thumbnail,
                 author: { name: info.author.name },
-                formats
+                formats: STATIC_FORMATS
             };
 
-            infoCache.set(url as string, result);
+            infoCache.set(urlStr, { data: result, timestamp: Date.now() });
             return res.status(200).json(result);
         } catch (error) {
+            console.error('GetInfo error:', error);
             return res.status(500).json({ message: "Error" });
         }
     }
@@ -97,45 +129,34 @@ export class MediaController {
 
             if (format === 'mp3') {
                 outputPath = path.join(tempDir, `${videoId}.m4a`);
-
                 const audioFormats: Record<string, string> = {
                     'high': 'bestaudio[ext=m4a]',
                     'medium': 'bestaudio[ext=m4a][abr<=128]',
                     'low': 'bestaudio[ext=m4a][abr<=96]'
                 };
-
                 const selectedFormat = audioFormats[quality] || audioFormats['high'];
                 command = `yt-dlp -f "${selectedFormat}" --no-playlist -o "${outputPath}" "${url}"`;
-
                 contentType = 'audio/mp4';
                 filename = 'audio.m4a';
             } else {
                 outputPath = path.join(tempDir, `${videoId}.mp4`);
-
                 const videoQualities: Record<string, string> = {
                     '1080': '1080',
                     '720': '720',
                     '480': '480',
                     '360': '360'
                 };
-
                 const selectedQuality = videoQualities[quality] || '1080';
                 command = `yt-dlp -f "bestvideo[height<=${selectedQuality}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]" --merge-output-format mp4 --no-playlist --concurrent-fragments 8 -o "${outputPath}" "${url}"`;
-
                 contentType = 'video/mp4';
                 filename = 'video.mp4';
             }
 
-            await execAsync(command, {
-                maxBuffer: 1024 * 1024 * 150
-            });
+            await execAsync(command, { maxBuffer: 1024 * 1024 * 150 });
 
-            if (!fs.existsSync(outputPath)) {
-                throw new Error('Download failed');
-            }
+            if (!fs.existsSync(outputPath)) throw new Error('Download failed');
 
             const stat = fs.statSync(outputPath);
-
             res.setHeader('Content-Type', contentType);
             res.setHeader('Content-Length', stat.size);
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -144,24 +165,15 @@ export class MediaController {
             stream.pipe(res);
 
             stream.on('end', () => {
-                try {
-                    fs.unlinkSync(outputPath);
-                } catch (err) {
-                    console.error('Error deleting temp file:', err);
-                }
+                try { fs.unlinkSync(outputPath); } catch (err) { console.error('Error deleting temp file:', err); }
             });
 
             stream.on('error', (err) => {
                 console.error('Stream error:', err);
                 if (fs.existsSync(outputPath)) {
-                    try {
-                        fs.unlinkSync(outputPath);
-                    } catch (unlinkErr) {
-                        console.error('Error deleting temp file:', unlinkErr);
-                    }
+                    try { fs.unlinkSync(outputPath); } catch (unlinkErr) { console.error('Error deleting temp file:', unlinkErr); }
                 }
             });
-
         } catch (error) {
             console.error('Download error:', error);
             return res.status(500).json({ message: "Error downloading media" });
