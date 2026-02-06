@@ -12,19 +12,19 @@ const ORIGINS = process.env.ORIGINS?.split(",") || "*";
 
 const app = express();
 
-const rate_limit_global = rateLimit({
+const rateLimitGlobal = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
     message: "Too many requests from this IP, please try again after 15 minutes"
 });
 
-const cors_configuration = cors({
+const corsConfiguration = cors({
     origin: ORIGINS,
     credentials: true
 });
 
-app.use(rate_limit_global);
-app.use(cors_configuration);
+app.use(rateLimitGlobal);
+app.use(corsConfiguration);
 app.use(express.json());
 
 app.listen(PORT, () => {
