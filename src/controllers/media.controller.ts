@@ -80,36 +80,50 @@ export class MediaController {
                 return res.status(200).json(cachedInfo.data);
             }
 
-            for (const cacheItem of searchCache.values()) {
-                const found = cacheItem.data.find(v => v.video_id === videoId);
-                if (found) {
-                    const result = {
-                        id: found.video_id,
-                        url: found.url,
-                        title: found.title,
-                        duration: found.duration,
-                        thumbnail: found.thumbnail,
-                        author: found.author,
-                        formats: STATIC_FORMATS
-                    };
-                    infoCache.set(videoId, { data: result, timestamp: Date.now() });
-                    return res.status(200).json(result);
-                }
+            try {
+                const { stdout } = await execAsync(`yt-dlp -j --no-playlist "https://www.youtube.com/watch?v=${videoId}"`);
+                const info = JSON.parse(stdout);
+
+                const availableHeights = [...new Set(info.formats
+                    .filter((f: any) => f.vcodec !== 'none' && f.height)
+                    .map((f: any) => f.height))]
+                    .sort((a: any, b: any) => b - a) as number[];
+
+                const result = {
+                    id: videoId,
+                    url: `https://www.youtube.com/watch?v=${videoId}`,
+                    title: info.title,
+                    duration: info.duration,
+                    thumbnail: info.thumbnail,
+                    author: { name: info.uploader || info.author },
+                    formats: [
+                        { format_id: "high", ext: "m4a", resolution: "Master Audio (320kbps)" },
+                        { format_id: "medium", ext: "m4a", resolution: "Standard Audio (128kbps)" },
+                        ...availableHeights.map(h => ({
+                            format_id: h.toString(),
+                            ext: "mp4",
+                            resolution: `${h}p ${h >= 1080 ? 'Ultra ' : ''}Video`
+                        }))
+                    ]
+                };
+
+                infoCache.set(videoId, { data: result, timestamp: Date.now() });
+                return res.status(200).json(result);
+
+            } catch (ytError) {
+                const info = await yts({ videoId: videoId });
+                const result = {
+                    id: info.videoId,
+                    url: info.url,
+                    title: info.title,
+                    duration: info.seconds,
+                    thumbnail: info.thumbnail,
+                    author: { name: info.author.name },
+                    formats: STATIC_FORMATS
+                };
+                infoCache.set(videoId, { data: result, timestamp: Date.now() });
+                return res.status(200).json(result);
             }
-
-            const info = await yts({ videoId: videoId });
-            const result = {
-                id: info.videoId,
-                url: info.url,
-                title: info.title,
-                duration: info.seconds,
-                thumbnail: info.thumbnail,
-                author: { name: info.author.name },
-                formats: STATIC_FORMATS
-            };
-
-            infoCache.set(videoId, { data: result, timestamp: Date.now() });
-            return res.status(200).json(result);
         } catch (error) {
             console.error('GetInfo error:', error);
             return res.status(500).json({ message: "Error" });
@@ -144,18 +158,12 @@ export class MediaController {
                 outputPath = path.join(tempDir, `${jobId}.${extension}`);
                 args = ['-f', selectedFormat, '--no-playlist', '-o', outputPath, url];
             } else {
-                const videoQualities: Record<string, string> = {
-                    '1080': '1080',
-                    '720': '720',
-                    '480': '480',
-                    '360': '360'
-                };
-                const selectedQuality = videoQualities[quality] || '1080';
+                const resolution = /^\d+$/.test(quality) ? quality : '1080';
                 extension = 'mp4';
                 contentType = 'video/mp4';
                 outputPath = path.join(tempDir, `${jobId}.${extension}`);
                 args = [
-                    '-f', `bestvideo[height<=${selectedQuality}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]`,
+                    '-f', `bestvideo[height<=${resolution}][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]`,
                     '--merge-output-format', 'mp4',
                     '--no-playlist',
                     '--concurrent-fragments', '8',
