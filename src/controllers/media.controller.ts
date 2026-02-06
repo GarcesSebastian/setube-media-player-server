@@ -14,12 +14,8 @@ const infoCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 30 * 60 * 1000;
 
 const STATIC_FORMATS = [
-    { format_id: "high", ext: "m4a", resolution: "High (256kbps)" },
-    { format_id: "medium", ext: "m4a", resolution: "Medium (128kbps)" },
-    { format_id: "low", ext: "m4a", resolution: "Low (96kbps)" },
-    { format_id: "1080", ext: "mp4", resolution: "1080p" },
-    { format_id: "720", ext: "mp4", resolution: "720p" },
-    { format_id: "480", ext: "mp4", resolution: "480p" }
+    { format_id: "high", ext: "m4a", resolution: "Audio Por Defecto", isDynamic: false },
+    { format_id: "1080", ext: "mp4", resolution: "Video Por Defecto", isDynamic: false }
 ];
 
 setInterval(() => {
@@ -80,52 +76,81 @@ export class MediaController {
                 return res.status(200).json(cachedInfo.data);
             }
 
-            try {
-                const { stdout } = await execAsync(`yt-dlp -j --no-playlist "https://www.youtube.com/watch?v=${videoId}"`);
-                const info = JSON.parse(stdout);
-
-                const availableHeights = [...new Set(info.formats
-                    .filter((f: any) => f.vcodec !== 'none' && f.height)
-                    .map((f: any) => f.height))]
-                    .sort((a: any, b: any) => b - a) as number[];
-
-                const result = {
-                    id: videoId,
-                    url: `https://www.youtube.com/watch?v=${videoId}`,
-                    title: info.title,
-                    duration: info.duration,
-                    thumbnail: info.thumbnail,
-                    author: { name: info.uploader || info.author },
-                    formats: [
-                        { format_id: "high", ext: "m4a", resolution: "Master Audio (320kbps)" },
-                        { format_id: "medium", ext: "m4a", resolution: "Standard Audio (128kbps)" },
-                        ...availableHeights.map(h => ({
-                            format_id: h.toString(),
-                            ext: "mp4",
-                            resolution: `${h}p ${h >= 1080 ? 'Ultra ' : ''}Video`
-                        }))
-                    ]
-                };
-
-                infoCache.set(videoId, { data: result, timestamp: Date.now() });
-                return res.status(200).json(result);
-
-            } catch (ytError) {
-                const info = await yts({ videoId: videoId });
-                const result = {
-                    id: info.videoId,
-                    url: info.url,
-                    title: info.title,
-                    duration: info.seconds,
-                    thumbnail: info.thumbnail,
-                    author: { name: info.author.name },
-                    formats: STATIC_FORMATS
-                };
-                infoCache.set(videoId, { data: result, timestamp: Date.now() });
-                return res.status(200).json(result);
+            for (const cacheItem of searchCache.values()) {
+                const found = cacheItem.data.find(v => v.video_id === videoId);
+                if (found) {
+                    const result = {
+                        id: found.video_id,
+                        url: found.url,
+                        title: found.title,
+                        duration: found.duration,
+                        thumbnail: found.thumbnail,
+                        author: found.author,
+                        formats: STATIC_FORMATS,
+                        isFast: true
+                    };
+                    return res.status(200).json(result);
+                }
             }
+
+            const info = await yts({ videoId: videoId });
+            const result = {
+                id: info.videoId,
+                url: info.url,
+                title: info.title,
+                duration: info.seconds,
+                thumbnail: info.thumbnail,
+                author: { name: info.author.name },
+                formats: STATIC_FORMATS,
+                isFast: true
+            };
+
+            return res.status(200).json(result);
         } catch (error) {
             console.error('GetInfo error:', error);
+            return res.status(500).json({ message: "Error" });
+        }
+    }
+
+    public static async GetFormats(req: Request, res: Response) {
+        try {
+            const { url } = req.query;
+            if (!url) return res.status(400).json({ message: "URL missing" });
+
+            const videoId = (url as string).includes('v=')
+                ? (url as string).split('v=')[1]?.split('&')[0]
+                : (url as string).split('/').pop()?.split('?')[0];
+
+            if (!videoId) return res.status(400).json({ message: "Invalid ID" });
+
+            const { stdout } = await execAsync(`yt-dlp -j --no-playlist --no-warnings --no-check-certificates "${url}"`);
+            const info = JSON.parse(stdout);
+
+            const availableHeights = [...new Set(info.formats
+                .filter((f: any) => f.vcodec !== 'none' && f.height)
+                .map((f: any) => f.height))]
+                .sort((a: any, b: any) => b - a) as number[];
+
+            const formats = [
+                { format_id: "high", ext: "m4a", resolution: "Master Audio (320kbps)", isDynamic: true },
+                { format_id: "medium", ext: "m4a", resolution: "Standard Audio (128kbps)", isDynamic: true },
+                ...availableHeights.map(h => ({
+                    format_id: h.toString(),
+                    ext: "mp4",
+                    resolution: `${h}p ${h >= 1080 ? 'Ultra ' : ''}Video`,
+                    isDynamic: true
+                }))
+            ];
+
+            const existing = infoCache.get(videoId);
+            if (existing) {
+                existing.data.formats = formats;
+                existing.data.isFast = false;
+            }
+
+            return res.status(200).json({ formats });
+        } catch (error) {
+            console.error('GetFormats error:', error);
             return res.status(500).json({ message: "Error" });
         }
     }

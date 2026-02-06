@@ -31,6 +31,7 @@ export class MediaRoute {
 
         router.get("/search", SearchRateLimit, MediaController.Query);
         router.get("/info", InfoRateLimit, MediaController.GetInfo);
+        router.get("/formats", InfoRateLimit, MediaController.GetFormats);
         router.post("/download", DownloadRateLimit, MediaController.Download);
 
         app.use(`${name}`, router);
