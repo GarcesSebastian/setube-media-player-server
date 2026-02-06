@@ -1,15 +1,37 @@
 import { Router } from "express";
 import { MediaController } from "../controllers/media.controller.js";
 import { LogUtils } from "../utils/log.utils.js";
+import { RateLimitUtils } from "../utils/ratelimit.utils.js";
+
+const SearchRateLimit = RateLimitUtils.createRateLimit({
+    windowMs: 10 * 1000,
+    max: 10,
+    blockDurationMs: 1 * 60 * 1000,
+    message: "Too many requests"
+});
+
+const InfoRateLimit = RateLimitUtils.createRateLimit({
+    windowMs: 10 * 1000,
+    max: 5,
+    blockDurationMs: 1 * 60 * 1000,
+    message: "Too many requests"
+});
+
+const DownloadRateLimit = RateLimitUtils.createRateLimit({
+    windowMs: 10 * 1000,
+    max: 2,
+    blockDurationMs: 10 * 60 * 1000,
+    message: "Too many requests"
+});
 
 export class MediaRoute {
     public static init(name: string, app: Router) {
         LogUtils.LogRoute(name);
         const router = Router();
 
-        router.get("/search", MediaController.Query);
-        router.get("/info", MediaController.GetInfo);
-        router.post("/download", MediaController.Download);
+        router.get("/search", SearchRateLimit, MediaController.Query);
+        router.get("/info", InfoRateLimit, MediaController.GetInfo);
+        router.post("/download", DownloadRateLimit, MediaController.Download);
 
         app.use(`${name}`, router);
     }
