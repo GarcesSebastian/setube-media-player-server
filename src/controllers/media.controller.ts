@@ -67,14 +67,19 @@ export class MediaController {
             if (!url) return res.status(400).json({ message: "URL missing" });
 
             const urlStr = url as string;
+            const videoId = urlStr.includes('v=')
+                ? urlStr.split('v=')[1]?.split('&')[0]
+                : urlStr.split('/').pop()?.split('?')[0];
 
-            const cachedInfo = infoCache.get(urlStr);
+            if (!videoId) return res.status(400).json({ message: "Invalid YouTube URL" });
+
+            const cachedInfo = infoCache.get(videoId);
             if (cachedInfo && (Date.now() - cachedInfo.timestamp) < CACHE_TTL) {
                 return res.status(200).json(cachedInfo.data);
             }
 
             for (const cacheItem of searchCache.values()) {
-                const found = cacheItem.data.find(v => v.url === urlStr);
+                const found = cacheItem.data.find(v => v.video_id === videoId);
                 if (found) {
                     const result = {
                         id: found.video_id,
@@ -85,13 +90,10 @@ export class MediaController {
                         author: found.author,
                         formats: STATIC_FORMATS
                     };
-                    infoCache.set(urlStr, { data: result, timestamp: Date.now() });
+                    infoCache.set(videoId, { data: result, timestamp: Date.now() });
                     return res.status(200).json(result);
                 }
             }
-
-            const videoId = urlStr.split('v=')[1]?.split('&')[0];
-            if (!videoId) return res.status(400).json({ message: "Invalid YouTube URL" });
 
             const info = await yts({ videoId: videoId });
             const result = {
@@ -104,7 +106,7 @@ export class MediaController {
                 formats: STATIC_FORMATS
             };
 
-            infoCache.set(urlStr, { data: result, timestamp: Date.now() });
+            infoCache.set(videoId, { data: result, timestamp: Date.now() });
             return res.status(200).json(result);
         } catch (error) {
             console.error('GetInfo error:', error);
