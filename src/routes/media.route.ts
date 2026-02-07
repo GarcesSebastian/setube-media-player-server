@@ -5,21 +5,21 @@ import { RateLimitUtils } from "../utils/ratelimit.utils.js";
 
 const SearchRateLimit = RateLimitUtils.createRateLimit({
     windowMs: 10 * 1000,
-    max: 10,
+    max: 20,
     blockDurationMs: 1 * 60 * 1000,
     message: "Too many requests"
 });
 
 const InfoRateLimit = RateLimitUtils.createRateLimit({
     windowMs: 10 * 1000,
-    max: 5,
+    max: 20,
     blockDurationMs: 1 * 60 * 1000,
     message: "Too many requests"
 });
 
 const DownloadRateLimit = RateLimitUtils.createRateLimit({
     windowMs: 10 * 1000,
-    max: 2,
+    max: 20,
     blockDurationMs: 10 * 60 * 1000,
     message: "Too many requests"
 });
